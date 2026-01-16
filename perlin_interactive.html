@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Интерактивный Шум Перлина</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <style>
+        body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; background: #2c3e50; font-family: sans-serif; overflow: hidden; }
+        #canvas-container { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); border-radius: 8px; overflow: hidden; }
+        .ui-panel { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; pointer-events: none; }
+        .ui-panel h2 { margin: 0 0 5px 0; font-size: 14px; color: #333; }
+        .ui-panel p { margin: 0; font-size: 12px; color: #666; }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container">
+    <div class="ui-panel">
+        <h2>Конструктор миров</h2>
+        <p>Вращай векторы градиента</p>
+    </div>
+</div>
+
+<script>
+let gridSize = 5; // Сетка 5x5 векторов (4x4 ячейки)
+let cols, rows;
+let gradients = [];
+let cellSize;
+let noiseRes = 100; // Разрешение отрисовки шума (для скорости)
+let noiseImg;
+
+let activeVector = null;
+
+function setup() {
+    let canvas = createCanvas(600, 600);
+    canvas.parent('canvas-container');
+    
+    cols = gridSize;
+    rows = gridSize;
+    cellSize = width / (cols - 1);
+    
+    // Инициализация случайных векторов (углов)
+    for (let i = 0; i < cols; i++) {
+        gradients[i] = [];
+        for (let j = 0; j < rows; j++) {
+            gradients[i][j] = p5.Vector.random2D();
+        }
+    }
+    
+    noiseImg = createImage(noiseRes, noiseRes);
+    updateNoiseMap();
+}
+
+function draw() {
+    background(255);
+    
+    // 1. Отрисовка карты шума (растянутой на весь экран)
+    image(noiseImg, 0, 0, width, height);
+    
+    // 2. Отрисовка сетки
+    stroke(0, 50);
+    for (let i = 0; i < cols; i++) line(i * cellSize, 0, i * cellSize, height);
+    for (let j = 0; j < rows; j++) line(0, j * cellSize, width, j * cellSize);
+    
+    // 3. Отрисовка и логика векторов
+    drawVectors();
+    
+    if (activeVector) {
+        handleInteraction();
+    }
+}
+
+function fade(t) {
+    // Полином 5-й степени: 6t^5 - 15t^4 + 10t^3
+    return t * t * t * (t * (t * 6 - 15) + 10);
+}
+
+function lerpFunc(a, b, t) {
+    return a + t * (b - a);
+}
+
+function updateNoiseMap() {
+    noiseImg.loadPixels();
+    
+    for (let y = 0; y < noiseRes; y++) {
+        for (let x = 0; x < noiseRes; x++) {
+            // Координаты в пространстве сетки (от 0 до cols-1)
+            let gx = (x / noiseRes) * (cols - 1);
+            let gy = (y / noiseRes) * (rows - 1);
+            
+            let x0 = floor(gx);
+            let x1 = x0 + 1;
+            let y0 = floor(gy);
+            let y1 = y0 + 1;
+            
+            // Локальные координаты внутри ячейки (0..1)
+            let tx = gx - x0;
+            let ty = gy - y0;
+            
+            // Скалярные произведения для 4-х углов
+            let d00 = dotProd(x0, y0, tx, ty);
+            let d10 = dotProd(x1, y0, tx - 1, ty);
+            let d01 = dotProd(x0, y1, tx, ty - 1);
+            let d11 = dotProd(x1, y1, tx - 1, ty - 1);
+            
+            // Интерполяция
+            let u = fade(tx);
+            let v = fade(ty);
+            
+            let nx0 = lerpFunc(d00, d10, u);
+            let nx1 = lerpFunc(d01, d11, u);
+            let n = lerpFunc(nx0, nx1, v);
+            
+            // Маппинг значения (-1..1) в цвет ландшафта
+            let col = getTerrainColor(n);
+            noiseImg.set(x, y, col);
+        }
+    }
+    noiseImg.updatePixels();
+}
+
+function dotProd(gridX, gridY, dx, dy) {
+    let g = gradients[gridX][gridY];
+    return g.x * dx + g.y * dy;
+}
+
+function getTerrainColor(v) {
+    // Нормализация v из [-0.7, 0.7] в [0, 1] примерно
+    let val = map(v, -0.5, 0.5, 0, 1);
+    
+    if (val < 0.3) return color(44, 62, 80);    // Глубокая вода
+    if (val < 0.45) return color(52, 152, 219); // Вода
+    if (val < 0.5) return color(241, 196, 15);  // Песок
+    if (val < 0.7) return color(46, 204, 113);  // Трава
+    if (val < 0.85) return color(39, 174, 96);  // Лес
+    if (val < 0.95) return color(127, 140, 141); // Горы
+    return color(255, 255, 255);                // Снег
+}
+
+function drawVectors() {
+    for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+            let x = i * cellSize;
+            let y = j * cellSize;
+            let g = gradients[i][j];
+            
+            // Рисуем стрелку
+            stroke(0);
+            strokeWeight(2);
+            let arrowLen = cellSize * 0.4;
+            line(x, y, x + g.x * arrowLen, y + g.y * arrowLen);
+            
+            // Рисуем кончик (интерактивная точка)
+            fill(activeVector && activeVector.i == i && activeVector.j == j ? '#e67e22' : 255);
+            strokeWeight(1);
+            circle(x + g.x * arrowLen, y + g.y * arrowLen, 8);
+            
+            // Узел сетки
+            fill(0);
+            circle(x, y, 4);
+        }
+    }
+}
+
+function mousePressed() {
+    // Проверка: попали ли в кончик стрелки
+    for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+            let x = i * cellSize;
+            let y = j * cellSize;
+            let g = gradients[i][j];
+            let arrowLen = cellSize * 0.4;
+            let tx = x + g.x * arrowLen;
+            let ty = y + g.y * arrowLen;
+            
+            if (dist(mouseX, mouseY, tx, ty) < 15) {
+                activeVector = {i: i, j: j};
+                return;
+            }
+        }
+    }
+}
+
+function mouseReleased() {
+    activeVector = null;
+}
+
+function handleInteraction() {
+    let i = activeVector.i;
+    let j = activeVector.j;
+    let originX = i * cellSize;
+    let originY = j * cellSize;
+    
+    // Вычисляем новый угол вектора
+    let v = createVector(mouseX - originX, mouseY - originY);
+    v.normalize();
+    gradients[i][j] = v;
+    
+    updateNoiseMap();
+}
+</script>
+
+</body>
+</html>
